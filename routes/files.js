@@ -1,71 +1,84 @@
 const router = require('express').Router();
-const multer = require('multer');
+const { errorMonitor } = require('events');
+const multer = require('multer');    //to store
 const path = require('path');
 const File = require('../models/file');
-const { v4: uuidv4 } = require('uuid');
+const {v4:uuid4} = require('uuid');
+
+
 
 let storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/') ,
+    destination: (req, file, cb) => cb(null, 'upload/'),
     filename: (req, file, cb) => {
-        const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(file.originalname)}`;
-              cb(null, uniqueName)
-    } ,
-});
+        const uniqueName = `${Date.now()}-${Math.round(Math.random()*1E9)}${path.extname(file.originalname)}`;
+        cb(null, uniqueName);
+    } 
+})
 
-let upload = multer({ storage, limits:{ fileSize: 1000000 * 100 }, }).single('myfile'); //100mb
+let upload = multer({
+    storage, 
+    limit: { FileSize: 1000000 * 100},
+}).single('myfile');  //name attribute on frontend
 
-router.post('/', (req, res) => {
-    upload(req, res, async (err) => {
-      if (err) {
-        return res.status(500).send({ error: err.message });
-      }
+
+router.post('/', (req, res)=>{
+    //store file in upload
+    upload(req, res, async (err)=>{
+        if(!req.file){
+            return res.json({error:'All fields are required'});
+        }
+        if(err){
+            return res.status(500).send({error: error.message});
+        }
+        //store data in database
         const file = new File({
             filename: req.file.filename,
-            uuid: uuidv4(),
+            uuid : uuid4(),
             path: req.file.path,
-            size: req.file.size
+            size: req.file.size,
         });
         const response = await file.save();
-        res.json({ file: `${process.env.APP_BASE_URL}files/${response.uuid}` });
-      });
-});
+        return res.json({file: `${process.env.APP_BASE_URL}/files/${response.uuid}`});
 
-router.post('/send', async (req, res) => {
-  const { uuid, emailTo, emailFrom, expiresIn } = req.body;
-  if(!uuid || !emailTo || !emailFrom) {
-      return res.status(422).send({ error: 'All fields are required except expiry.'});
-  }
-  // Get data from db 
-  try {
-    const file = await File.findOne({ uuid: uuid });
-    if(file.sender) {
-      return res.status(422).send({ error: 'Email already sent once.'});
+    })
+
+    //send response --link
+})
+
+router.post('/send', async (req, res)=>{
+    console.log(req.body);
+    const { uuid, emailTo, emailFrom }= req.body;
+    if(!uuid || !emailTo || !emailFrom){
+        return res.status(420).send({error: 'All fields are required'})
+    }
+    //get data from database
+
+    const file = await File.findOne({ uuid: uuid});
+    //email sent only once-to check
+    if(file.sender){
+        return res.status(422).send({error: 'Email already sent.'})
     }
     file.sender = emailFrom;
     file.receiver = emailTo;
     const response = await file.save();
-    // send mail
-    const sendMail = require('../services/mailService');
+
+    // send email
+    const sendMail = require('../services/emailService');
     sendMail({
-      from: emailFrom,
-      to: emailTo,
-      subject: 'inShare file sharing',
-      text: `${emailFrom} shared a file with you.`,
-      html: require('../services/emailTemplate')({
-                emailFrom, 
-                downloadLink: `${process.env.APP_BASE_URL}/files/${file.uuid}?source=email` ,
-                size: parseInt(file.size/1000) + ' KB',
-                expires: '24 hours'
-            })
-    }).then(() => {
-      return res.json({success: true});
-    }).catch(err => {
-      return res.status(500).json({error: 'Error in email sending.'});
+        from: emailFrom,
+        to: emailTo,
+        Subject: 'inshare file sharing',
+        text: `${emailFrom} shared a file with you`,
+        html: require('../services/emailTemplate')({
+            emailFrom: emailFrom,
+            downloadLink: `${process.env.APP_BASE_URL}/files/${file.uuid}`,
+            size: parseInt(file.size/1000) + 'KB',
+            expires : '24 hours'
+        })
     });
-} catch(err) {
-  return res.status(500).send({ error: 'Something went wrong.'});
-}
+    return res.send({ success: true });
 
 });
+
 
 module.exports = router;
